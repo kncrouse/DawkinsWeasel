@@ -19,9 +19,10 @@ to setup
 end
 
 to go
-  if all-done [ stop ]
 
-  if (with-selection and go-with-selection = 0 ) or (not with-selection and go-without-selection = 0) [
+  if all-done [ stop ] ; this line prevents the simulation from continuing to print out the following at every timestep after completion:
+
+  if (with-selection and go-with-selection = 0 ) or (not with-selection and go-without-selection = 0) [ ; simulation found an exact matching phrase
     set all-done true
     print word "It took " word generation word " generations of " word number-of-offspring " offspring to evolve to the target phrase."
     stop ]
@@ -33,7 +34,7 @@ to output-generation
   output-print (word generation "   " parent-string)
 end
 
-to-report go-with-selection
+to-report go-with-selection ; go function used when WITH-SELECTION is TRUE
 
   let offspring-string parent-string
   let top-offspring-string parent-string
@@ -62,6 +63,7 @@ to-report go-with-selection
       set j j + 1
     ]
 
+    ; compares current offspring with top offspring
     let current-offspring-score get-score offspring-string
     if current-offspring-score < top-offspring-score [
       set top-offspring-string offspring-string
@@ -75,7 +77,7 @@ to-report go-with-selection
   report top-offspring-score
 end
 
-to-report go-without-selection
+to-report go-without-selection ; go function used when WITH-SELECTION is FALSE
   let uppercase-length length uppercase
   set generation generation + 1
 
@@ -97,7 +99,7 @@ to setup-intial-string
   let string-length length target-phrase
   if string-length < 1 [ set target-phrase "SORRY DAVE I CANNOT ALLOW THAT" ]
   let i 0
-  while [i < string-length]
+  while [i < string-length] ; replace lowercase with uppercase:
   [
     if (not member? item i target-phrase uppercase) [
       ifelse (member? item i target-phrase lowercase)
@@ -124,7 +126,7 @@ to initialize-string
   output-generation
 end
 
-to-report get-score [input-string]
+to-report get-score [input-string] ; score used to determine how well the INPUT-STRING matches the TARGET-PHRASE
 
   let string-length length input-string
   let score string-length

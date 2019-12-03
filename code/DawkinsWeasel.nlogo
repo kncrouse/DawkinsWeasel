@@ -276,7 +276,7 @@ with-selection
 -1000
 
 @#$#@#$#@
-# Dawkins Weasel 1.0.2
+# Dawkins Weasel 1.0.3
 
 Compatible with 6.1.1
 
@@ -339,7 +339,7 @@ Dawkins, R. 1996. The Blind Watchmaker. New York, NY, W. W. Norton & Co.
 
 ## HOW TO CITE
 
-Crouse, Kristin (2019). “Dawkins Weasel” (Version 1.0.2). CoMSES Computational Model Library. Retrieved from: https://www.comses.net/codebases/6042/releases/1.0.2/
+Crouse, Kristin (2019). “Dawkins Weasel” (Version 1.0.3). CoMSES Computational Model Library. Retrieved from: https://www.comses.net/codebases/6042/releases/1.0.3/
 
 ## COPYRIGHT AND LICENSE
 

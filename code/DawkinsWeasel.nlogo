@@ -1,146 +1,314 @@
+; -------------------------------------------------------------------------------------
+; Dawkins Weasel model
+; -------------------------------------------------------------------------------------
+; Big idea (plain language):
+;   This model “evolves” a random string of characters until it
+;   exactly matches a chosen TARGET-PHRASE.
+;
+;   - Each generation creates new strings by copying the current string.
+;   - Copying can include random mistakes (“mutations”) at each character.
+;   - If WITH-SELECTION is ON, keep the best offspring (closest match).
+;   - If WITH-SELECTION is OFF, just mutate the single string randomly.
+;
+; This is a teaching model. It demonstrates why cumulative selection
+; (keeping improvements) is far more effective than pure random change.
+; -------------------------------------------------------------------------------------
+
+
+; -------------------------------------------------------------------------------------
+; GLOBAL VARIABLES (shared across the whole model)
+; -------------------------------------------------------------------------------------
+
 globals
 [
-  uppercase
-  lowercase
-  parent-string
-  generation
-  all-done
+  allowed-chars     ; the “alphabet” the model is allowed to use (A–Z plus space)
+  parent-string     ; the current best string (the “parent” for the next generation)
+  generation        ; how many generations have passed so far
 ]
 
+
+; -------------------------------------------------------------------------------------
+; SETUP: the user presses SETUP to initialize everything
+; -------------------------------------------------------------------------------------
+
 to setup
-  clear-all
-  set uppercase "ABCDEFGHIJKLMNOPQRSTUVWXYZ "
-  set lowercase "abcdefghijklmnopqrstuvwxyz"
-  setup-intial-string
+  clear-all         ; wipe the world and reset all variables
+  clear-output      ; wipe the Output Area so the run log starts fresh
+
+  ; Restrict the keyboard to uppercase letters plus space, matching Dawkins’s setup.
+  set allowed-chars "ABCDEFGHIJKLMNOPQRSTUVWXYZ "
+
+  ; Clean up whatever the user typed into target-phrase so it only contains
+  ; valid characters (uppercase A–Z and spaces).
+  normalize-target-phrase
+
+  ; Create a random starting string with the same length as the target phrase.
   initialize-string
+
+  ; Start counting generations from 0 (the random initial state is generation 0).
   set generation 0
-  set all-done false
-  reset-ticks
+
+  reset-ticks       ; reset NetLogo's tick counter
 end
+
+
+; -------------------------------------------------------------------------------------
+; SETUP HELPERS
+; -------------------------------------------------------------------------------------
+
+to normalize-target-phrase
+  ; Goal:
+  ;   Ensure target-phrase uses only characters in allowed-chars (A–Z and space).
+  ;   - Lowercase letters are converted to uppercase.
+  ;   - Any other symbol (punctuation, numbers, etc.) becomes a space.
+  ;
+  ; Why do this?
+  ;   Because our “typewriter” only has the characters in allowed-chars.
+
+  let lowercase "abcdefghijklmnopqrstuvwxyz"
+  let string-length length target-phrase
+
+  ; If the user leaves target-phrase empty, substitute a default phrase.
+  if string-length < 1
+  [
+    set target-phrase "SORRY DAVE I CANNOT ALLOW THAT"
+    set string-length length target-phrase
+  ]
+
+  ; Walk through the target-phrase one character at a time.
+  let i 0
+  while [i < string-length]
+  [
+    let ch item i target-phrase
+
+    ; If this character is already in allowed-chars (uppercase A–Z or space),
+    ; leave it alone.
+    ;
+    ; Otherwise, try to convert it:
+    ;   - If it is lowercase, replace it with the matching uppercase letter.
+    ;   - If it is anything else, replace it with a space.
+    if not member? ch allowed-chars
+    [
+      ifelse member? ch lowercase
+      [
+        ; Convert lowercase to uppercase by finding the lowercase letter’s position
+        ; and taking the character at the same position in allowed-chars.
+        ;
+        ; Example: ch = "b" -> position in lowercase is 1 -> item 1 in allowed-chars is "B"
+        set target-phrase replace-item i target-phrase item (position ch lowercase) allowed-chars
+      ][
+        ; Not an uppercase letter, not a lowercase letter -> treat as space
+        set target-phrase replace-item i target-phrase " "
+      ]
+    ]
+
+    set i i + 1
+  ]
+end
+
+to initialize-string
+  ; Goal:
+  ;   Create a random starting string the same length as target-phrase.
+  ;   This is the “ancestral” string that begins evolving.
+
+  let initial-string target-phrase
+  let string-length length initial-string
+  let character-count length allowed-chars
+
+  ; Replace each character with a random allowed character.
+  let index 0
+  while [index < string-length]
+  [
+    let random-letter item (random character-count) allowed-chars
+    set initial-string replace-item index initial-string random-letter
+    set index index + 1
+  ]
+
+  set parent-string initial-string
+
+  ; Log generation 0 to the Output Area.
+  output-generation
+end
+
+
+; -------------------------------------------------------------------------------------
+; GO: the user presses GO-ONCE or GO to advance the model
+; -------------------------------------------------------------------------------------
 
 to go
+  ; Each call to go advances the model by exactly ONE generation.
+  ; Compute a “score” for the new parent-string:
+  ;   score = number of characters that do NOT match the target-phrase
+  ;   score = 0 means a perfect match.
 
-  if all-done [ stop ] ; this line prevents the simulation from continuing to print out the following at every timestep after completion:
+  let score 0
+  let selection-state ""
 
-  if (with-selection and go-with-selection = 0 ) or (not with-selection and go-without-selection = 0) [ ; simulation found an exact matching phrase
-    set all-done true
-    print word "It took " word generation word " generations of " word number-of-offspring " offspring to evolve to the target phrase."
-    stop ]
+  ; Choose which stepping rule to use based on the WITH-SELECTION switch.
+  ifelse with-selection
+  [
+    set selection-state "on"
+    set score step-with-selection
+  ][
+    set selection-state "off"
+    set score step-without-selection
+  ]
 
-  tick
+  ; If score is 0, the target is reached, so stop and report.
+  ifelse score = 0
+  [
+    print (word
+      "It took " generation " generations to evolve to the target phrase ('"
+      target-phrase
+      "') using mutation-rate = " mutation-rate
+      ", offspring-per-generation = " offspring-per-generation
+      ", and selection " selection-state "."
+    )
+    stop
+  ][
+    ; Otherwise, the model continues.
+    tick
+  ]
 end
 
-to output-generation
-  output-print (word generation "   " parent-string)
-end
 
-to-report go-with-selection ; go function used when WITH-SELECTION is TRUE
+; -------------------------------------------------------------------------------------
+; EVOLUTION STEP WITH SELECTION
+; -------------------------------------------------------------------------------------
 
-  let offspring-string parent-string
-  let top-offspring-string parent-string
-  let top-offspring-score get-score parent-string
-  let uppercase-length length uppercase
+to-report step-with-selection
+  ; Plain language:
+  ;   1) Make many offspring copies of the parent-string.
+  ;   2) Randomly mutate characters in each offspring (based on mutation-rate).
+  ;   3) Score each offspring by how close it is to target-phrase.
+  ;   4) Keep the single best offspring as the new parent-string.
+
+  let character-count length allowed-chars
   let string-length length parent-string
 
+  ; Start by assuming the current parent is the best.
+  let top-offspring-string parent-string
+  let top-offspring-score get-score parent-string
+
+  ; Moving forward one generation.
   set generation generation + 1
 
+  ; Create offspring-per-generation offspring and keep the best.
   let i 0
-
-  ; EACH OFFSPRING LOOP
-  while [i < number-of-offspring]
+  while [i < offspring-per-generation]
   [
-    set offspring-string parent-string;
-    let j 0
+    ; Begin with an exact copy of the parent.
+    let offspring-string parent-string
 
-    ; EACH CHARACTER LOOP
+    ; Walk through each character position and decide whether to mutate it.
+    let j 0
     while [j < string-length]
     [
-      let mutation-probability random-float 1.0
-      if mutation-probability < mutation-rate [
-        let random-letter item (random uppercase-length) uppercase
+      ; With probability mutation-rate, replace this character with a random allowed character.
+      if (random-float 1.0) < mutation-rate
+      [
+        let random-letter item (random character-count) allowed-chars
         set offspring-string replace-item j offspring-string random-letter
       ]
       set j j + 1
     ]
 
-    ; compares current offspring with top offspring
+    ; Compute how many characters still differ from the target.
     let current-offspring-score get-score offspring-string
-    if current-offspring-score < top-offspring-score [
+
+    ; Smaller score = closer match. If this offspring is better, keep it.
+    if current-offspring-score < top-offspring-score
+    [
       set top-offspring-string offspring-string
       set top-offspring-score current-offspring-score
     ]
 
     set i i + 1
   ]
+
+  ; After evaluating all offspring, adopt the best one as the new parent.
   set parent-string top-offspring-string
+
+  ; Log this generation and return the score.
   output-generation
   report top-offspring-score
 end
 
-to-report go-without-selection ; go function used when WITH-SELECTION is FALSE
-  let uppercase-length length uppercase
+
+; -------------------------------------------------------------------------------------
+; EVOLUTION STEP WITHOUT SELECTION
+; -------------------------------------------------------------------------------------
+
+to-report step-without-selection
+  ; Plain language:
+  ;   This is “random typing.” There is no competition among offspring.
+  ;   Take the current string and randomly mutate characters in-place.
+  ;   Any “improvement” is accidental and not protected from being lost.
+
+  let character-count length allowed-chars
+  let string-length length parent-string
+
   set generation generation + 1
 
+  ; Walk through each character position and mutate it with probability mutation-rate.
   let i 0
-  while [i < length parent-string]
+  while [i < string-length]
+  [
+    if (random-float 1.0) < mutation-rate
     [
-      let mutation-probability random-float 1.0
-      if mutation-probability < mutation-rate [
-        let random-letter item (random uppercase-length) uppercase
-        set parent-string replace-item i parent-string random-letter
-      ]
-      set i i + 1
+      let random-letter item (random character-count) allowed-chars
+      set parent-string replace-item i parent-string random-letter
     ]
+    set i i + 1
+  ]
+
   output-generation
   report get-score parent-string
 end
 
-to setup-intial-string
-  let string-length length target-phrase
-  if string-length < 1 [ set target-phrase "SORRY DAVE I CANNOT ALLOW THAT" ]
-  let i 0
-  while [i < string-length] ; replace lowercase with uppercase:
-  [
-    if (not member? item i target-phrase uppercase) [
-      ifelse (member? item i target-phrase lowercase)
-      [ set target-phrase replace-item i target-phrase item (position (item i target-phrase) lowercase) uppercase ]
-      [ set target-phrase replace-item i target-phrase " " ]
-    ]
-    set i i + 1
-  ]
-end
 
-to initialize-string
-  let initial-string target-phrase
-  let string-length length initial-string
-  let uppercase-length length uppercase
-  let index 0
-  while [index < string-length]
-  [
-    let random-letter item (random uppercase-length) uppercase
-    set initial-string replace-item index initial-string random-letter
-    set index index + 1
-  ]
-  set parent-string initial-string;
-  set parent-string initial-string
-  output-generation
-end
+; -------------------------------------------------------------------------------------
+; SCORING: how close is a string to the target phrase?
+; -------------------------------------------------------------------------------------
 
-to-report get-score [input-string] ; score used to determine how well the INPUT-STRING matches the TARGET-PHRASE
+to-report get-score [input-string]
+  ; Score definition:
+  ;   score = number of character positions that do NOT match target-phrase.
+  ;
+  ; Example:
+  ;   target:  ABCD
+  ;   input:   ABXD
+  ;   matches at positions 0,1,3 -> 3 matches -> 1 mismatch -> score = 1
 
   let string-length length input-string
+
+  ; Start with the maximum possible mismatches (one per character),
+  ; then subtract 1 for each correct matching position.
   let score string-length
+
   let index 0
   while [index < string-length]
   [
-    let goal-letter item index target-phrase
-    let input-letter item index input-string
-    if goal-letter = input-letter [set score score - 1]
+    if item index target-phrase = item index input-string
+    [
+      set score score - 1
+    ]
     set index index + 1
   ]
 
   report score
 end
+
+
+; -------------------------------------------------------------------------------------
+; OUTPUT: print the current generation and parent-string to the Output Area
+; -------------------------------------------------------------------------------------
+
+to output-generation
+  ; Format: generation number, three spaces, current string
+  output-print (word generation "   " parent-string)
+end
+
 @#$#@#$#@
 GRAPHICS-WINDOW
 84
@@ -172,7 +340,7 @@ ticks
 BUTTON
 570
 14
-637
+638
 47
 go
 go
@@ -228,7 +396,7 @@ OUTPUT
 12
 
 INPUTBOX
-145
+201
 59
 638
 119
@@ -241,9 +409,9 @@ String
 INPUTBOX
 20
 59
-138
+193
 119
-number-of-offspring
+offspring-per-generation
 10.0
 1
 0
@@ -252,7 +420,7 @@ Number
 SLIDER
 20
 14
-195
+169
 47
 mutation-rate
 mutation-rate
@@ -265,7 +433,7 @@ NIL
 HORIZONTAL
 
 SWITCH
-204
+176
 14
 379
 47
@@ -276,80 +444,119 @@ with-selection
 -1000
 
 @#$#@#$#@
-# Dawkins Weasel 1.0.3
-
-Compatible with 6.1.1
+# Dawkins Weasel 1.2.0
 
 ## WHAT IS IT?
 
-Dawkins Weasel is a NetLogo model that illustrates the principle of evolution by natural selection. It is inspired by a thought experiment presented by Richard Dawkins in his book The Blind Watchmaker (1986). He presents the idea as follows:
+Dawkins Weasel is a NetLogo model that illustrates the principle of **evolution by cumulative selection**. It is inspired by a thought experiment presented by Richard Dawkins in *The Blind Watchmaker* (1986), which contrasts evolution by natural selection with evolution by random chance alone.
 
-#### "I don't know who it was who first pointed out that, given enough time, a monkey bashing away at random on a typewriter could produce all the works of Shakespeare. The operative phrase is, of course, given enough time. Let us limit the task facing our monkey somewhat. Suppose that he has to produce, not the complete works of Shakespeare but just the short sentence 'METHINKS IT IS LIKE A WEASEL', and we shall make it relatively easy by giving him a typewriter with a restricted keyboard, one with just the 26 (capital) letters, and a space bar. How long will he take to write this one little sentence?"
+Dawkins introduces the thought experiment as follows:
 
-He goes on to point out that - by random mechanisms alone - a monkey is unlikely to produce the phrase in any reasonable amount of time:
+> *“I don't know who it was who first pointed out that, given enough time, a monkey bashing away at random on a typewriter could produce all the works of Shakespeare. The operative phrase is, of course, given enough time. Let us limit the task facing our monkey somewhat. Suppose that he has to produce, not the complete works of Shakespeare but just the short sentence ‘METHINKS IT IS LIKE A WEASEL’, and we shall make it relatively easy by giving him a typewriter with a restricted keyboard, one with just the 26 (capital) letters, and a space bar.”*
 
-#### "To put it mildly, the phrase we seek would be a long time coming, to say nothing of the complete works of Shakespeare."
+Dawkins points out that random typing alone is extraordinarily unlikely to produce the target phrase in any reasonable amount of time:
 
-However, Dawkins points out, with selection the problem becomes quite manageable:
+> *“To put it mildly, the phrase we seek would be a long time coming, to say nothing of the complete works of Shakespeare.”*
 
-#### "What about cumulative selection; how much more effective should this be? Very very much more effective, perhaps more so than we at first realize, although it is almost obvious when we reflect further. We again use our computer monkey, but with a crucial difference in its program. It again begins by choosing a random sequence of 28 letters, just as before: 'WDLMNLT DTJBKWIRZREZLMQCO P'. It now 'breeds from' this random phrase. It duplicates it repeatedly, but with a certain chance of random error - 'mutation' - in the copying. The computer examines the mutant nonsense phrases, the 'progeny' of the original phrase, and chooses the one which, however slightly, most resembles the target phrase, 'METHINKS IT IS LIKE A WEASEL'."
+However, he then introduces cumulative selection:
 
-Dawkins Weasel is a model of this thought experiment, demonstrating the effectiveness of selection for rapidely producing a given target phrase.
+> *“The computer examines the mutant nonsense phrases, the ‘progeny’ of the original phrase, and chooses the one which, however slightly, most resembles the target phrase.”*
+
+This model implements that contrast directly. When selection is turned off, the phrase changes randomly over time. When selection is turned on, each generation produces multiple variants, and the variant that most closely matches the **target-phrase** becomes the parent for the next generation.
+
+The purpose of the model is not to simulate real biological evolution in full detail, but to demonstrate why cumulative selection is fundamentally different from—and vastly more effective than—purely random change.
+
+Developed using NetLogo 6.4.0 (expected to run on 6.x releases).
+
 
 ## HOW TO USE IT
 
-### Settings
 
-Write in the TARGET-PHRASE input box to determine the target phrase for your simulation.
+#### Settings
 
-Use the MUTATION-RATE slider to determine the rate at which each character in a string mutates. The higher the mutation rate, the more likely that each character present in the parent string will produce an error - mutation - in its offspring.
+**target-phrase**  
+The phrase the model is trying to evolve toward. Only uppercase letters (A–Z) and spaces are allowed. Any other characters are converted to spaces during setup.
 
-Write in the NUMBER-OF-OFFSPRING input box to determine how many offspring each parent string will produce for every generation.
+**mutation-rate**  
+The probability that each individual character mutates when a new generation is created. Higher values introduce more random change; lower values preserve existing matches more strongly.
 
-Use the WITH-SELECTION switch to decide whether your simulation will include selection or not. Without selection, you are simulating a monkey typing on a keyboard, causing random changes to the string. With selection, you are simulating cumulative selection, as described by Dawkins above.
+**offspring-per-generation**  
+The number of offspring strings produced each generation when selection is on. Each offspring is a mutated copy of the current parent string. The best-matching offspring becomes the parent for the next generation.
 
-### Buttons
+**with-selection**  
+Controls whether cumulative selection is applied.  
+- **On:** Multiple offspring are generated and evaluated each generation; the best match is retained.  
+- **Off:** The string mutates randomly over time with no selection.
 
-Press SETUP after all of the settings have been chosen. This will initialize the program to create a random string to serve as the initial ancestral state.
 
-Press GO-ONCE to produce the parent string for the next generation, which is selected because it is the closest match to the TARGET PHRASE.
+#### Buttons
 
-Press GO to make the simulation run continuously. This will create new generations of strings indefinitely or until it matches the TARGET PHRASE. To stop the simulation, press the GO button again.
+**setup**  
+Initializes the model by creating a random starting string of the same length as the target-phrase.
 
-### Output
+**go**  
+Runs the model continuously until the target-phrase is matched exactly. Press the button again to stop the run manually.
 
-While it is running, the simulation will print out the results from each generation, which provides the current generation number and the closest matching string of that generation. For example:
+**go once**  
+Advances the model by exactly one generation.
 
-#### 20   ZETHINKS IT AS LIKW A WEABEL
 
-If/When the simulation produces a string that completely matches the TARGET-PHRASE, the simulation will stop and print out the results of this simulation in the COMMAND-CENTER box.
+#### Output
+
+The output window displays one line per generation, showing:  
+- the generation number, and  
+- the current best-matching string.
+
+Example output: `20   ZETHINKS IT AS LIKW A WEABEL`
+
+When the evolving string exactly matches the target-phrase, the model stops automatically and prints a summary message in the **Command Center** reporting how many generations were required.
+
 
 ## THINGS TO NOTICE
 
-The purpose of this model is to demonstrate that natural selection is different than accumulated changes occuring by pure chance. Pay attention to how the settings affect the rate at which the simulation produces the TARGET PHRASE:
+This model is designed to help distinguish cumulative selection from random change. As you experiment, consider the following:
 
-1. What MUTATION RATE(s) produce the most or least rapid effects?
-2. How does the NUMBER OF OFFSPRING affect this rate?
-3. Does it matter how long the TARGET PHRASE is?
-4. Which is more effective: with selection or without selection?
+1. How does the **mutation-rate** affect the speed of convergence?
+2. How does increasing or decreasing **offspring-per-generation** change the outcome?
+3. How does the length of the **target-phrase** influence the number of generations required?
+4. How does the behavior differ when **with-selection** is turned off?
+5. Why does selection allow improvement to accumulate over generations, while random change does not?
+
+
+## THINGS TO TRY
+
+1. Run the model with **with-selection** turned **off** and observe how long it takes to make progress.
+2. Try very low and very high **mutation-rate** values with selection on. What happens in each case?
+3. Increase the length of the **target-phrase** and compare convergence times.
+4. Use **go once** to step through early generations and watch how partial matches accumulate.
+
 
 ## REFERENCES
 
-Dawkins, R. 1996. The Blind Watchmaker. New York, NY, W. W. Norton & Co.
+Dawkins, R. 1986. *The Blind Watchmaker*. New York, NY: W. W. Norton & Company.
+
 
 ## HOW TO CITE
 
-Crouse, Kristin (2019). “Dawkins Weasel” (Version 1.0.3). CoMSES Computational Model Library. Retrieved from: https://www.comses.net/codebases/6042/releases/1.0.3/
+Crouse, Kristin (2026). "Dawkins Weasel" (Version 1.2.0). CoMSES Computational Model Library. https://www.comses.net/codebases/6042/releases/1.2.0/
+
 
 ## COPYRIGHT AND LICENSE
 
-© 2019 K N Crouse
+© 2018–2026 K. N. Crouse
 
-This model was created at the University of Minnesota as part of a series of models to illustrate principles in biological evolution.
+This model was created at the University of Minnesota as part of a series of models illustrating principles in biological evolution.
 
-The model may be freely used, modified and redistributed provided this copyright is included and the resulting models are not used for profit.
+This model is released under the **Apache License, Version 2.0**.  
+You may use, modify, and redistribute this model in accordance with the terms of that license.
 
-Contact K N Crouse at crou0048@umn.edu if you have questions about its use.
+A copy of the license should be included with this distribution.  
+If not, it is available at: https://www.apache.org/licenses/LICENSE-2.0
+
+For questions about use or adaptation, contact: **kncrouse@gmail.com**
+
+
+.
 @#$#@#$#@
 default
 true
@@ -638,7 +845,7 @@ false
 Polygon -7500403 true true 270 75 225 30 30 225 75 270
 Polygon -7500403 true true 30 75 75 30 270 225 225 270
 @#$#@#$#@
-NetLogo 6.1.1
+NetLogo 6.4.0
 @#$#@#$#@
 @#$#@#$#@
 @#$#@#$#@
